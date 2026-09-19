@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Study Partner",
+  "version": "1.0.0",
+  "description": "AI study assistant for any video. Bring your own LLM.",
+  "permissions": ["tabCapture", "storage", "activeTab", "scripting", "sidePanel", "offscreen"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background/service-worker.js", "type": "module" },
+  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content/content-script.js"], "run_at": "document_idle" }],
+  "side_panel": { "default_path": "sidepanel/sidepanel.html" },
+  "action": { "default_title": "Open Study Partner" },
+  "options_page": "settings/settings.html"
+}

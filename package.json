@@ -1,0 +1,6 @@
+{
+  "name": "study-partner",
+  "private": true,
+  "type": "module",
+  "scripts": { "check": "node --check background/service-worker.js && node --check content/content-script.js && node --check sidepanel/sidepanel.js && node --check settings/settings.js && node --check lib/transcript-store.js && node --check lib/context-builder.js && node --check lib/llm-adapter.js && node --check offscreen/offscreen.js" }
+}

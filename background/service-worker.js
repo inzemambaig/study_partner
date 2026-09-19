@@ -1,0 +1,20 @@
+import { upsertChunk, getState, clearStore, setSession } from '../lib/transcript-store.js';
+import { buildPrompt } from '../lib/context-builder.js';
+import { callLLM } from '../lib/llm-adapter.js';
+
+const DEFAULTS = { llm: { provider: 'ollama', model: 'llama3.2', baseUrl: 'http://localhost:11434', maxTokens: 1000, temperature: 0.3 }, transcription: { mode: 'captions', language: 'en-US', groqApiKey: '', contextWindowSeconds: 120 }, ui: { autoPauseOnQuery: true } };
+let activeTabId = null; let currentVideoTimeSec = 0; let transcribing = false;
+const sendPanel = (message) => chrome.runtime.sendMessage(message).catch(() => {});
+async function ensureOffscreen() { const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] }); if (!contexts.length) await chrome.offscreen.createDocument({ url: 'offscreen/offscreen.html', reasons: ['USER_MEDIA'], justification: 'Capture tab audio for live transcription' }); }
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => { (async () => {
+  if (message.type === 'START_TRANSCRIPTION') { activeTabId = message.tabId; transcribing = true; setSession({ videoTitle: message.videoTitle || '', videoUrl: message.videoUrl || '' }); const stored = await chrome.storage.local.get(DEFAULTS); const transcription = { ...DEFAULTS.transcription, ...stored.transcription }; await ensureOffscreen(); if (transcription.mode === 'whisper-groq') { if (!transcription.groqApiKey) throw new Error('Add a Groq API key in Settings, or switch transcription mode to Captions.'); const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: activeTabId }); await chrome.runtime.sendMessage({ type: 'OFFSCREEN_START', mode: transcription.mode, streamId, apiKey: transcription.groqApiKey, language: transcription.language, startTime: currentVideoTimeSec }); } sendPanel({ type: 'LISTENING_STARTED' }); sendResponse({ ok: true }); }
+  else if (message.type === 'STOP_TRANSCRIPTION') { transcribing = false; await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP' }); sendPanel({ type: 'LISTENING_STOPPED' }); sendResponse({ ok: true }); }
+  else if (message.type === 'TRANSCRIPT_CHUNK') { const chunk = upsertChunk(message.chunk); sendPanel({ type: 'TRANSCRIPT_UPDATE', chunk }); sendResponse({ ok: true }); }
+  else if (message.type === 'CAPTIONS_FOUND') { message.chunks.forEach((chunk) => upsertChunk(chunk)); sendPanel({ type: 'TRANSCRIPT_REPLACE', chunks: getState().chunks }); sendResponse({ ok: true }); }
+  else if (message.type === 'ERROR') { sendPanel({ type: 'ERROR', message: message.message }); sendResponse({ ok: false }); }
+  else if (message.type === 'VIDEO_TIME_UPDATE') { currentVideoTimeSec = message.currentTimeSec; sendPanel({ type: 'VIDEO_TIME_UPDATE', currentTimeSec: currentVideoTimeSec }); sendResponse({ ok: true }); }
+  else if (message.type === 'GET_TRANSCRIPT') sendResponse(getState());
+  else if (message.type === 'CLEAR_TRANSCRIPT') { clearStore(); sendPanel({ type: 'TRANSCRIPT_CLEARED' }); sendResponse({ ok: true }); }
+  else if (message.type === 'USER_QUERY') { const settings = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)), ...(await chrome.storage.local.get('settings')).settings }; if (settings.ui?.autoPauseOnQuery && activeTabId) chrome.tabs.sendMessage(activeTabId, { type: 'PAUSE_VIDEO' }).catch(() => {}); const prompt = buildPrompt({ userQuery: message.query, store: getState(), currentVideoTimeSec: message.currentVideoTimeSec ?? currentVideoTimeSec, settings: { ...settings.transcription, systemPrompt: settings.llm?.systemPrompt } }); try { const fullResponse = await callLLM({ ...prompt, config: settings.llm, onStream: (token) => sendPanel({ type: 'LLM_TOKEN', token }) }); sendPanel({ type: 'LLM_DONE', fullResponse, contextMeta: prompt.contextMeta }); } catch (error) { sendPanel({ type: 'ERROR', message: error.message }); } sendResponse({ ok: true }); }
+})().catch((error) => sendResponse({ error: error.message })); return true; });
+chrome.runtime.onInstalled.addListener(() => chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }));
